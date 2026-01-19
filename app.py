@@ -8,6 +8,8 @@ import time
 import pyperclip
 import webbrowser
 import subprocess
+import urllib.request
+import urllib.parse
 from pathlib import Path
 from flask import Flask, render_template, jsonify, request
 
@@ -93,6 +95,77 @@ def convert_coords_advanced(glat, glon, calibration_data):
     final_dlon = sum_dlon / total_weight
     return f"{(glat + final_dlat):.6f}, {(glon + final_dlon):.6f}"
 
+def reverse_geocode(lat, lon):
+    """
+    Получает название города и страны по координатам через Nominatim (OpenStreetMap).
+    Возвращает строку вида "Город, Страна" на русском языке.
+    """
+    try:
+        # Nominatim API - бесплатный, без ключей
+        url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&accept-language=ru"
+        
+        # Добавляем User-Agent (обязательно для Nominatim)
+        req = urllib.request.Request(url, headers={'User-Agent': 'GooToYaConverter/1.0'})
+        
+        # Делаем запрос с таймаутом
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            
+            address = data.get('address', {})
+            
+            # Пытаемся получить город из разных полей
+            city = (address.get('city') or 
+                   address.get('town') or 
+                   address.get('village') or 
+                   address.get('municipality') or
+                   address.get('county') or
+                   address.get('state'))
+            
+            country = address.get('country', '')
+            
+            # Формируем результат
+            if city and country:
+                return f"{city}, {country}"
+            elif city:
+                return city
+            elif country:
+                return country
+            else:
+                return "Город не найден"
+                
+    except urllib.error.HTTPError:
+        return "Не удалось получить данные"
+    except urllib.error.URLError:
+        return "Не удалось получить данные"
+    except Exception as e:
+        print(f"Geocoding error: {e}")
+        return "Город не найден"
+
+def get_location_for_point(point_data):
+    """
+    Получает местоположение для калибровочной точки.
+    Если уже есть в кеше - возвращает его, иначе запрашивает.
+    """
+    # Если уже есть - возвращаем
+    if 'location' in point_data and point_data['location']:
+        return point_data['location']
+    
+    # Парсим координаты Google
+    try:
+        coords_str = point_data.get('google', '')
+        m = coord_re.search(coords_str)
+        if m:
+            lat, lon = float(m.group(1)), float(m.group(2))
+            location = reverse_geocode(lat, lon)
+            # Небольшая задержка для уважения к серверу Nominatim (макс. 1 запрос в секунду)
+            time.sleep(1.1)
+            return location
+    except Exception as e:
+        print(f"Error getting location: {e}")
+    
+    return "Город не найден"
+
+
 # --- ГЛОБАЛЬНОЕ СОСТОЯНИЕ ---
 class AppState:
     def __init__(self):
@@ -105,19 +178,55 @@ class AppState:
         self.last_result_coords = ""
         self.pending_google = None
         
-        self.base_dir = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
-        # Файл калибровки держим рядом с приложением (и в exe, и при локальном запуске)
-        self.config_path = self.base_dir / CONFIG_FILE
+        # Для режима --onefile (PyInstaller) ресурсы лежат в _MEIPASS,
+        # а конфиг должен быть в AppData пользователя
+        
+        self.config_dir = self.get_config_dir()
+        self.config_path = self.config_dir / CONFIG_FILE
+        
+        # Создаем папку в AppData если нет
+        try:
+            os.makedirs(self.config_dir, exist_ok=True)
+        except Exception as e:
+            print(f"Error creating config dir: {e}")
+
+    def get_resource_path(self, relative_path):
+        """ Получает путь к ресурсам (работает и в IDE, и в EXE) """
+        try:
+            # PyInstaller создает временную папку в _MEIPASS
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
+        return os.path.join(base_path, relative_path)
+
+    def get_config_dir(self):
+        """ 
+        Возвращает путь к папке конфигурации в AppData.
+        Используем APPDATA, так как при запуске от имени админа (UAC)
+        переменная среды обычно сохраняется за текущим пользователем.
+        """
+        app_data = os.getenv('APPDATA')
+        if not app_data:
+            # Fallback если переменной нет
+            app_data = os.path.expanduser("~")
+            
+        return Path(app_data) / "GooToYaConverter"
 
     def load_config(self):
         try:
             if not os.path.exists(self.config_path):
-                initial = [{"google": f"{g[0]}, {g[1]}", "yandex": f"{y[0]}, {y[1]}"} for g, y in BASE_CALIBRATION]
+                initial = [{"google": f"{g[0]}, {g[1]}", "yandex": f"{y[0]}, {y[1]}", "location": ""} for g, y in BASE_CALIBRATION]
                 with open(self.config_path, 'w', encoding='utf-8') as f:
                     json.dump(initial, f, indent=4, ensure_ascii=False)
             
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 self.training_data = json.load(f)
+            
+            # Добавляем поле location если его нет
+            for point in self.training_data:
+                if 'location' not in point:
+                    point['location'] = ""
+            
             return True
         except Exception as e:
             print(f"Error loading config: {e}")
@@ -170,7 +279,17 @@ def monitor_clipboard_task():
                     state.pending_google = coords_str
                 else:
                     g, y = state.pending_google, coords_str
-                    state.training_data.append({"google": g, "yandex": y})
+                    new_point = {"google": g, "yandex": y, "location": ""}
+                    state.training_data.append(new_point)
+                    
+                    # Запускаем получение местоположения в фоновом потоке
+                    def fetch_location_async(point):
+                        location = get_location_for_point(point)
+                        point['location'] = location
+                        state.save_config()  # Автосохранение
+                    
+                    threading.Thread(target=fetch_location_async, args=(new_point,), daemon=True).start()
+                    
                     state.pending_google = None
                 continue
 
@@ -192,7 +311,12 @@ def monitor_clipboard_task():
             break
 
 # --- FLASK APP ---
-app = Flask(__name__)
+# Указываем явные пути к шаблонам и статике для корректной работы в --onefile
+template_folder = state.get_resource_path('templates')
+static_folder = state.get_resource_path('static')
+app = Flask(__name__, template_folder=template_folder, static_folder=static_folder)
+# Отключаем кеширование статических файлов для разработки
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
 @app.route('/')
 def index():
@@ -302,6 +426,31 @@ def clipboard_copy():
     pyperclip.copy(text)
     return jsonify(success=True)
 
+@app.route('/api/calibration/update-locations', methods=['POST'])
+def update_locations():
+    """
+    Обновляет местоположения для всех калибровочных точек.
+    Запускается в фоновом потоке.
+    """
+    def update_all_locations():
+        updated = 0
+        for point in state.training_data:
+            # Обновляем только если местоположение пустое
+            if not point.get('location'):
+                location = get_location_for_point(point)
+                point['location'] = location
+                updated += 1
+        
+        if updated > 0:
+            state.save_config()
+        print(f"Locations updated: {updated}")
+    
+    # Запускаем в фоновом потоке
+    threading.Thread(target=update_all_locations, daemon=True).start()
+    
+    return jsonify(success=True, message="Обновление местоположений запущено")
+
+
 def open_window(port):
     """Пытается открыть окно в режиме приложения или просто браузер"""
     url = f'http://127.0.0.1:{port}'
@@ -333,7 +482,7 @@ def open_window(port):
     webbrowser.open_new_tab(url)
 
 if __name__ == '__main__':
-    PORT = 5000
+    PORT = 5001
     
     # Если есть webview и он работает - используем его (хотя из-за pythonnet скорее всего нет)
     if HAS_WEBVIEW:

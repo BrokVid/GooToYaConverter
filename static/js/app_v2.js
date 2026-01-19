@@ -242,153 +242,38 @@ document.addEventListener('DOMContentLoaded', function () {
         elements.pointsCount.textContent = data.length;
         elements.calibTableBody.innerHTML = '';
 
-        // Группировка
-        const groups = {};
-        data.forEach(item => {
-            const loc = item.location || 'Неизвестно';
-            if (!groups[loc]) groups[loc] = [];
-            groups[loc].push(item);
-        });
-
-        // Разделение на группы (>=2) и одиночные
-        const groupedCities = [];
-        const singleItems = [];
-
-        Object.keys(groups).forEach(city => {
-            if (groups[city].length >= 2 && city !== 'Неизвестно' && city !== 'Город не найден') {
-                groupedCities.push({ city: city, items: groups[city] });
-            } else {
-                singleItems.push(...groups[city]);
-            }
-        });
-
-        // Сортировка групп от А до Я
-        groupedCities.sort((a, b) => a.city.localeCompare(b.city));
-
-        // Добавляем группу "Остальные", если есть одиночные элементы
-        if (singleItems.length > 0) {
-            // Одиночные сортируем от А до Я по городу
-            singleItems.sort((a, b) => {
-                const locA = a.location || 'яяя';
-                const locB = b.location || 'яяя';
-                return locA.localeCompare(locB);
-            });
-            groupedCities.push({ city: 'Остальные', items: singleItems, isOthers: true });
-        }
-
-        // Хелперы для координат
-        const getLat = str => {
-            const parts = str.split(',');
-            return parts.length > 0 ? parseFloat(parts[0]) : 0;
-        };
-        const getLon = str => {
-            const parts = str.split(',');
-            return parts.length > 1 ? parseFloat(parts[1]) : 0;
-        };
-
-        // Внутри группы сортировка по широте (по возрастанию)
-        groupedCities.forEach(group => {
-            if (!group.isOthers) {
-                group.items.sort((a, b) => getLat(a.yandex) - getLat(b.yandex));
-            }
-        });
-
-        const createYandexLink = (coordsStr) => {
-            const lat = getLat(coordsStr);
-            const lon = getLon(coordsStr);
-            return `https://yandex.ru/maps?l=sat%2Cskl&ll=${lon}%2C${lat}&mode=whatshere&whatshere%5Bpoint%5D=${lon}%2C${lat}&whatshere%5Bzoom%5D=19&z=19`;
-        };
-
-        let visualIndex = 1;
-
-        // Рендер групп
-        groupedCities.forEach(group => {
-            // Уникальный ID для группы
-            const groupId = 'group-' + Math.random().toString(36).substr(2, 9);
-
-            // Заголовок группы
-            const headerTr = document.createElement('tr');
-            headerTr.className = 'group-header';
-            headerTr.dataset.groupId = groupId;
-            // Добавляем стрелочку для индикации
-            headerTr.innerHTML = `<td colspan="5">
-                <span style="display: inline-block; transition: transform 0.2s; margin-right: 8px;">▼</span>
-                ${group.city} (${group.items.length})
-            </td>`;
-
-            // Обработчик сворачивания
-            headerTr.addEventListener('click', () => {
-                const rows = document.querySelectorAll(`.group-row-${groupId}`);
-                const isHidden = rows[0].classList.contains('group-hidden');
-
-                rows.forEach(r => r.classList.toggle('group-hidden'));
-
-                // Вращаем стрелочку
-                const arrow = headerTr.querySelector('span');
-                arrow.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(-90deg)';
-            });
-
-            elements.calibTableBody.appendChild(headerTr);
-
-            // Элементы группы
-            group.items.forEach(row => renderRow(row, groupId));
-        });
-
-        // function renderRow(row, groupId = '') - теперь принимает ID группы
-        function renderRow(row, groupId) {
+        data.forEach((row, index) => {
             const tr = document.createElement('tr');
-            if (groupId) {
-                tr.classList.add(`group-row-${groupId}`); // Связываем с заголовком
-            }
-
             const location = row.location || 'Загрузка...';
-            const link = createYandexLink(row.yandex);
-
             tr.innerHTML = `
-                <td>${visualIndex++}</td>
+                <td>${index + 1}</td>
                 <td>${row.google}</td>
-                <td>
-                    <a href="${link}" target="_blank" class="coord-link" style="color: inherit; border-bottom: 1px dashed rgba(255,255,255,0.3); text-decoration: none;">
-                        ${row.yandex}
-                    </a>
-                </td>
+                <td>${row.yandex}</td>
                 <td class="location-cell">${location}</td>
                 <td>
-                    <button class="btn-delete-row" type="button" title="Удалить">
+                    <button class="btn-delete-row" onclick="deletePoint(${index})" title="Удалить">
                         <svg viewBox="0 0 24 24" fill="none"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="currentColor"/></svg>
                     </button>
                 </td>
             `;
-
-            // Клик по ряду для выделения
             tr.addEventListener('click', (e) => {
-                // Игнорируем клик, если он был по ссылке или кнопке
-                if (!e.target.closest('button') && !e.target.closest('a')) {
+                if (!e.target.closest('button')) {
                     tr.classList.toggle('selected');
                 }
             });
-
-            // Клик по кнопке удаления
-            const delBtn = tr.querySelector('.btn-delete-row');
-            delBtn.addEventListener('click', (e) => {
-                e.stopPropagation(); // Чтобы не выделять ряд при удалении
-                deletePointByRow(tr);
-            });
-
             elements.calibTableBody.appendChild(tr);
-        }
+        });
     }
 
-    // Удаление конкретной строки
-    async function deletePointByRow(tr) {
-        tr.classList.add('selected');
+    // Глобальная функция для удаления точки (чтобы работало из onclick)
+    window.deletePoint = async function (index) {
+        // Удаление конкретной точки пока не реализовано в API по индексу, 
+        // но можно передать данные. Для простоты сейчас сделаем удаление выбранных.
+        // Или переделаем API на удаление по индексу.
+        // Давайте лучше выделим строку и вызовем удаление выбранных
+        const rows = document.querySelectorAll('#calibTableBody tr');
+        rows[index].classList.add('selected');
         await deleteSelectedPoints();
-    }
-
-    // Сохраняем совместимость с глобальным вызовом, если он где-то остался
-    window.deletePoint = function (btn) {
-        const tr = btn.closest('tr');
-        if (tr) deletePointByRow(tr);
     };
 
     async function deleteSelectedPoints() {

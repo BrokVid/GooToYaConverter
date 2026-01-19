@@ -26,13 +26,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Build exe (PyInstaller, no console)
+      - name: Build exe (PyInstaller, OneFile)
         run: |
           .\build_exe.bat
 
       - name: Create ZIP archive
         run: |
-          Compress-Archive -Path "dist\GoogleToYandexWeb\*" -DestinationPath "GooToYaConverter-${{ github.ref_name }}.zip"
+          Compress-Archive -Path "dist\GoogleToYandexWeb.exe" -DestinationPath "GooToYaConverter-${{ github.ref_name }}.zip"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -42,12 +42,14 @@ jobs:
           body: |
             ## 🗺️ GooToYaConverter ${{ github.ref_name }}
             
-            Конвертер координат Google Maps → Яндекс.Карты
+            Конвертер координат Google Maps → Яндекс.Карты (Единая сборка)
             
             ### 📥 Установка
             1. Скачайте архив `GooToYaConverter-${{ github.ref_name }}.zip`
-            2. Распакуйте архив в любую папку
-            3. Запустите `GoogleToYandexWeb.exe`
+            2. Распакуйте `GoogleToYandexWeb.exe`
+            3. Запустите файл
+            
+            > ⚙️ Настройки и калибровка хранятся в папке `%APPDATA%\GooToYaConverter`
             
             ### ✨ Возможности
             - Автоматическая конвертация координат из буфера обмена

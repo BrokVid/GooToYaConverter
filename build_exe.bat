@@ -75,15 +75,14 @@ rmdir /s /q build 2>nul
 rmdir /s /q dist 2>nul
 del /q *.spec 2>nul
 
-echo Building EXE...
+echo Building EXE (Single File)...
 pyinstaller ^
   --noconfirm ^
-  --onedir ^
+  --onefile ^
   --noconsole ^
   --name GoogleToYandexWeb ^
   --add-data "templates;templates" ^
   --add-data "static;static" ^
-  --add-data "calibration.json;." ^
   app.py
 
 if errorlevel 1 (
@@ -94,6 +93,6 @@ if errorlevel 1 (
 
 echo.
 echo ===================================================
-echo Done! Output: %~dp0dist\GoogleToYandexWeb\GoogleToYandexWeb.exe
+echo Done! Output: %~dp0dist\GoogleToYandexWeb.exe
 echo ===================================================
 pause

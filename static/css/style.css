@@ -11,25 +11,25 @@
     --warning-color: #f59e0b;
     --warning-dark: #d97706;
     --info-color: #3b82f6;
-    
+
     --bg-primary: #0f0f23;
     --bg-secondary: #1a1a2e;
     --bg-card: rgba(30, 30, 50, 0.8);
     --bg-input: rgba(255, 255, 255, 0.05);
-    
+
     --text-primary: #ffffff;
     --text-secondary: rgba(255, 255, 255, 0.7);
     --text-muted: rgba(255, 255, 255, 0.5);
-    
+
     --border-color: rgba(255, 255, 255, 0.1);
     --border-radius: 16px;
     --border-radius-sm: 10px;
-    
+
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
     --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.3);
     --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.4);
     --shadow-glow: 0 0 30px rgba(102, 126, 234, 0.3);
-    
+
     --transition-fast: 0.15s ease;
     --transition-normal: 0.3s ease;
     --transition-slow: 0.5s ease;
@@ -58,7 +58,7 @@ body::before {
     left: 0;
     width: 100%;
     height: 100%;
-    background: 
+    background:
         radial-gradient(ellipse at 20% 20%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
         radial-gradient(ellipse at 80% 80%, rgba(118, 75, 162, 0.15) 0%, transparent 50%),
         radial-gradient(ellipse at 50% 50%, rgba(16, 185, 129, 0.05) 0%, transparent 50%);
@@ -67,8 +67,15 @@ body::before {
 }
 
 @keyframes backgroundPulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.7; }
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.7;
+    }
 }
 
 /* === КОНТЕЙНЕР ПРИЛОЖЕНИЯ === */
@@ -112,8 +119,15 @@ body::before {
 }
 
 @keyframes iconFloat {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-4px); }
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-4px);
+    }
 }
 
 .logo-icon svg {
@@ -170,8 +184,17 @@ body::before {
 }
 
 @keyframes pulse {
-    0%, 100% { transform: scale(1); opacity: 1; }
-    50% { transform: scale(1.2); opacity: 0.7; }
+
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    50% {
+        transform: scale(1.2);
+        opacity: 0.7;
+    }
 }
 
 #statusText {
@@ -393,8 +416,15 @@ body::before {
 }
 
 @keyframes buttonPulse {
-    0%, 100% { box-shadow: var(--shadow-glow); }
-    50% { box-shadow: 0 0 50px rgba(102, 126, 234, 0.6); }
+
+    0%,
+    100% {
+        box-shadow: var(--shadow-glow);
+    }
+
+    50% {
+        box-shadow: 0 0 50px rgba(102, 126, 234, 0.6);
+    }
 }
 
 /* === СЕКЦИЯ АВТОМАТИЧЕСКОЙ КОНВЕРТАЦИИ === */
@@ -486,6 +516,7 @@ body::before {
         opacity: 0;
         transform: translateY(-10px);
     }
+
     to {
         opacity: 1;
         transform: translateY(0);
@@ -578,7 +609,8 @@ body::before {
 }
 
 .calib-table th {
-    background: rgba(255, 255, 255, 0.05);
+    background: #1e1e32;
+    /* Full solid background matching card color to prevent transparency issues */
     font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
@@ -587,6 +619,9 @@ body::before {
     position: sticky;
     top: 0;
     z-index: 10;
+    /* Adding a bottom border to separate from content if needed, though already present in th/td */
+    box-shadow: 0 1px 0 var(--border-color);
+    /* better than border for sticky */
 }
 
 .calib-table tbody tr {
@@ -599,6 +634,34 @@ body::before {
 
 .calib-table tbody tr.selected {
     background: rgba(102, 126, 234, 0.2);
+}
+
+.calib-table tbody tr.group-header {
+    cursor: pointer;
+    user-select: none;
+}
+
+.calib-table tbody tr.group-header:hover td {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.calib-table tbody tr.group-header td {
+    background: rgba(255, 255, 255, 0.08);
+    /* Slightly lighter than header */
+    color: var(--primary-color);
+    font-weight: 700;
+    font-size: 0.85rem;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    text-align: center;
+    letter-spacing: 0.5px;
+    position: relative;
+    /* For chevron if we add one */
+}
+
+/* Скрытые ряды при сворачивании */
+.calib-table tbody tr.group-hidden {
+    display: none;
 }
 
 .calib-table td {
@@ -683,6 +746,23 @@ body::before {
     background: #6b3fa0;
 }
 
+.btn-update-locations {
+    background: var(--warning-color);
+    color: white;
+}
+
+.btn-update-locations:hover {
+    background: var(--warning-dark);
+}
+
+/* Колонка местоположения */
+.location-cell {
+    color: var(--text-primary) !important;
+    font-weight: 500;
+    min-width: 150px;
+}
+
+
 /* === УВЕДОМЛЕНИЯ (TOAST) === */
 .toast-container {
     position: fixed;
@@ -713,6 +793,7 @@ body::before {
         opacity: 0;
         transform: translateX(100px);
     }
+
     to {
         opacity: 1;
         transform: translateX(0);
