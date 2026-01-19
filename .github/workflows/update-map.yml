@@ -27,4 +27,4 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add calibration_map.geojson
-          git diff --quiet && git diff --staged --quiet || (git commit -m "🗺️ Auto-update calibration map" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🗺️ Auto-update calibration map" && git push origin HEAD:main)

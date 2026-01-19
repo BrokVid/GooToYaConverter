@@ -261,12 +261,52 @@ state.load_config()
 geocoding_service = GeocodingWorker()
 
 def check_swap_heuristic(coord1, coord2, current_calibration):
+    """
+    Определяет порядок координат на основе:
+    1. Точности (количества знаков после запятой).
+       По наблюдению пользователя: Google > 8 знаков, Яндекс < 8 знаков.
+    2. Если точность не дает результата, используем геометрическую проверку (distance).
+    
+    Возвращает (google_str, yandex_str).
+    """
+    # Парсим для проверки координат
     m1 = coord_re.search(coord1)
     m2 = coord_re.search(coord2)
     
     if not m1 or not m2:
         return coord1, coord2
+
+    # Получаем сырые строки чисел для подсчета длины
+    # coord1 = "Lat1, Lon1"
+    def get_precision_score(txt):
+        # Считаем среднее кол-во знаков после точки
+        matches = re.findall(r'\.(\d+)', txt)
+        if not matches: return 0
+        return sum(len(x) for x in matches) / len(matches)
+
+    prec1 = get_precision_score(coord1)
+    prec2 = get_precision_score(coord2)
+    
+    print(f"Swap Check Precision: 1={prec1:.1f}, 2={prec2:.1f}")
+    
+    # Правило: Google > 8, Yandex < 8.
+    # Если prec1 > 9 и prec2 < 8 => 1=Google, 2=Yandex (Порядок OK)
+    # Если prec1 < 8 и prec2 > 9 => 1=Yandex, 2=Google (SWAP!)
+    
+    THRESHOLD_HIGH = 8.5
+    THRESHOLD_LOW = 7.5
+    
+    if prec1 < THRESHOLD_LOW and prec2 > THRESHOLD_HIGH:
+        print(f"Detected SWAP by Precision: 1({prec1}) < 2({prec2}). 2 is likely Google.")
+        return coord2, coord1
         
+    if prec1 > THRESHOLD_HIGH and prec2 < THRESHOLD_LOW:
+        print(f"Order OK by Precision: 1({prec1}) > 2({prec2}). 1 is likely Google.")
+        return coord1, coord2
+        
+    # Если по точности непонятно (например оба короткие или оба длинные),
+    # используем старую геометрическую проверку
+    
     c1 = (float(m1.group(1)), float(m1.group(2)))
     c2 = (float(m2.group(1)), float(m2.group(2)))
     
@@ -290,10 +330,10 @@ def check_swap_heuristic(coord1, coord2, current_calibration):
     p2_lat, p2_lon = predict(c2[0], c2[1])
     err2 = get_distance(p2_lat, p2_lon, c1[0], c1[1])
     
-    print(f"Swap Check: G->Y error={err1:.7f}, Y->G error={err2:.7f}")
+    print(f"Swap Check Distance: G->Y error={err1:.7f}, Y->G error={err2:.7f}")
     
     if err2 < err1:
-        print("Detected SWAP: User likely copied Yandex then Google.")
+        print("Detected SWAP by Distance")
         return coord2, coord1
     else:
         return coord1, coord2
