@@ -141,118 +141,122 @@ def reverse_geocode(lat, lon):
         print(f"Geocoding error: {e}")
         return "Город не найден"
 
-def get_location_for_point(point_data):
-    """
-    Получает местоположение для калибровочной точки.
-    Если уже есть в кеше - возвращает его, иначе запрашивает.
-    """
-    # Если уже есть - возвращаем
-    if 'location' in point_data and point_data['location']:
-        return point_data['location']
+# --- СЛУЖЕБНЫЕ КЛАССЫ ---
+
+class GeocodingWorker:
+    def __init__(self):
+        self.queue = queue.Queue()
+        self.thread = threading.Thread(target=self._worker, daemon=True)
+        self.thread.start()
     
-    # Парсим координаты Google
+    def add_task(self, point):
+        """Добавляет точку в очередь на геокодирование"""
+        # Сразу ставим статус "Загрузка...", чтобы UI реагировал
+        point['location'] = "Загрузка..."
+        self.queue.put(point)
+    
+    def _worker(self):
+        while True:
+            try:
+                point = self.queue.get()
+                if point is None: break
+                
+                # Проверяем, может уже заполнено (например, при импорте)
+                # или статус не требует обновления (если мы не форсируем)
+                # Но здесь мы предполагаем, что раз попало в очередь - надо обновить.
+                
+                location = get_location_for_point_sync(point)
+                point['location'] = location
+                state.save_config() # Сохраняем после каждого успешного обновления
+                
+                self.queue.task_done()
+                
+            except Exception as e:
+                print(f"Worker error: {e}")
+            
+# Создаем воркер
+import queue
+geocoding_service = GeocodingWorker()
+
+def get_location_for_point_sync(point_data):
+    """Синхронная версия получения локации (с задержкой)"""
+    # Если уже похоже на валидный город, пропускаем?
+    # Нет, этот метод вызывается воркером явно.
+    
     try:
         coords_str = point_data.get('google', '')
         m = coord_re.search(coords_str)
         if m:
             lat, lon = float(m.group(1)), float(m.group(2))
-            location = reverse_geocode(lat, lon)
-            # Небольшая задержка для уважения к серверу Nominatim (макс. 1 запрос в секунду)
-            time.sleep(1.1)
-            return location
+            # Задержка ПЕРЕД запросом, чтобы гарантировать интервал между вызовами
+            time.sleep(1.2) 
+            return reverse_geocode(lat, lon)
     except Exception as e:
         print(f"Error getting location: {e}")
-    
     return "Город не найден"
 
-
-# --- ГЛОБАЛЬНОЕ СОСТОЯНИЕ ---
-class AppState:
-    def __init__(self):
-        self.training_data = []
-        self.is_monitoring = False
-        self.is_calibrating = False
-        self.monitor_thread = None
-        self.last_clipboard = ""
-        self.last_found_coords = ""
-        self.last_result_coords = ""
-        self.pending_google = None
+def check_swap_heuristic(coord1, coord2, current_calibration):
+    """
+    Определяет, в каком порядке идут координаты (Google, Yandex) или (Yandex, Google).
+    Возвращает кортеж (google_str, yandex_str).
+    Использует текущую модель калибровки для проверки ошибки.
+    """
+    # Парсим числа
+    m1 = coord_re.search(coord1)
+    m2 = coord_re.search(coord2)
+    
+    if not m1 or not m2:
+        return coord1, coord2
         
-        # Для режима --onefile (PyInstaller) ресурсы лежат в _MEIPASS,
-        # а конфиг должен быть в AppData пользователя
+    c1 = (float(m1.group(1)), float(m1.group(2)))
+    c2 = (float(m2.group(1)), float(m2.group(2)))
+    
+    # Гипотеза 1: 1=Google, 2=Yandex
+    # Конвертируем c1 -> ожидаемый y1
+    calib_list = state.get_calib_list()
+    
+    # Если калибровки нет совсем, используем дефолтные коэффициенты
+    # (Дефолтные настроены на Google -> Yandex для Екатеринбурга/России)
+    
+    # Предсказание для Гипотезы 1 (c1 -> Y)
+    # Используем простую линейную модель для быстроты или advanced
+    def predict(lat, lon):
+        # Если списка нет, берем дефолт
+        if not calib_list:
+             ylat = DEFAULT_A * lat + DEFAULT_B * lon + DEFAULT_C
+             ylon = DEFAULT_D * lat + DEFAULT_E * lon + DEFAULT_F
+             return ylat, ylon
         
-        self.config_dir = self.get_config_dir()
-        self.config_path = self.config_dir / CONFIG_FILE
-        
-        # Создаем папку в AppData если нет
+        # Разбираем строку результата advanced конвертации обратно в float
+        # Это немного коряво, но надежно
+        res_str = convert_coords_advanced(lat, lon, calib_list)
         try:
-            os.makedirs(self.config_dir, exist_ok=True)
-        except Exception as e:
-            print(f"Error creating config dir: {e}")
+            r_lat, r_lon = map(float, res_str.split(','))
+            return r_lat, r_lon
+        except:
+             # Fallback
+             return lat, lon
 
-    def get_resource_path(self, relative_path):
-        """ Получает путь к ресурсам (работает и в IDE, и в EXE) """
-        try:
-            # PyInstaller создает временную папку в _MEIPASS
-            base_path = sys._MEIPASS
-        except Exception:
-            base_path = os.path.abspath(".")
-        return os.path.join(base_path, relative_path)
-
-    def get_config_dir(self):
-        """ 
-        Возвращает путь к папке конфигурации в AppData.
-        Используем APPDATA, так как при запуске от имени админа (UAC)
-        переменная среды обычно сохраняется за текущим пользователем.
-        """
-        app_data = os.getenv('APPDATA')
-        if not app_data:
-            # Fallback если переменной нет
-            app_data = os.path.expanduser("~")
-            
-        return Path(app_data) / "GooToYaConverter"
-
-    def load_config(self):
-        try:
-            if not os.path.exists(self.config_path):
-                initial = [{"google": f"{g[0]}, {g[1]}", "yandex": f"{y[0]}, {y[1]}", "location": ""} for g, y in BASE_CALIBRATION]
-                with open(self.config_path, 'w', encoding='utf-8') as f:
-                    json.dump(initial, f, indent=4, ensure_ascii=False)
-            
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                self.training_data = json.load(f)
-            
-            # Добавляем поле location если его нет
-            for point in self.training_data:
-                if 'location' not in point:
-                    point['location'] = ""
-            
-            return True
-        except Exception as e:
-            print(f"Error loading config: {e}")
-            return False
-
-    def save_config(self):
-        try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                json.dump(self.training_data, f, indent=4, ensure_ascii=False)
-            return True
-        except Exception as e:
-            print(f"Error saving config: {e}")
-            return False
-            
-    def get_calib_list(self):
-        calib_list = []
-        for p in self.training_data:
-            try:
-                g_l, g_o = map(float, p["google"].split(", "))
-                y_l, y_o = map(float, p["yandex"].split(", "))
-                calib_list.append(((g_l, g_o), (y_l, y_o)))
-            except: continue
-        return calib_list
-
-state = AppState()
-state.load_config()
+    p1_lat, p1_lon = predict(c1[0], c1[1])
+    # Ошибка Гипотезы 1
+    err1 = get_distance(p1_lat, p1_lon, c2[0], c2[1])
+    
+    # Гипотеза 2: 2=Google, 1=Yandex
+    p2_lat, p2_lon = predict(c2[0], c2[1])
+    # Ошибка Гипотезы 2
+    err2 = get_distance(p2_lat, p2_lon, c1[0], c1[1])
+    
+    print(f"Swap Check: G->Y error={err1:.7f}, Y->G error={err2:.7f}")
+    
+    # Если ошибка во втором случае значительно меньше (например в 2 раза или просто меньше при больших числах)
+    # Но для надежности проверим порог. Координаты почти одинаковые.
+    # Обычно ошибка правильной пары < 0.0001 (метры). Неправильной - больше.
+    
+    if err2 < err1:
+        print("Detected SWAP: User likely copied Yandex then Google.")
+        return coord2, coord1
+    else:
+        return coord1, coord2
 
 # --- ФОНОВЫЙ МОНИТОРИНГ ---
 def monitor_clipboard_task():
@@ -276,19 +280,25 @@ def monitor_clipboard_task():
             
             if state.is_calibrating:
                 if state.pending_google is None:
+                    # Это первая скопированная координата из пары
                     state.pending_google = coords_str
+                    # Можно помигать в UI, что получена первая часть
                 else:
-                    g, y = state.pending_google, coords_str
-                    new_point = {"google": g, "yandex": y, "location": ""}
+                    # Это вторая координата. Проверяем порядок.
+                    raw_1 = state.pending_google
+                    raw_2 = coords_str
+                    
+                    # Применяем эвристику для определения кто есть кто
+                    final_google, final_yandex = check_swap_heuristic(raw_1, raw_2, state)
+                    
+                    new_point = {"google": final_google, "yandex": final_yandex, "location": "Загрузка..."}
                     state.training_data.append(new_point)
                     
-                    # Запускаем получение местоположения в фоновом потоке
-                    def fetch_location_async(point):
-                        location = get_location_for_point(point)
-                        point['location'] = location
-                        state.save_config()  # Автосохранение
+                    # Отправляем в очередь геокодирования
+                    geocoding_service.add_task(new_point)
                     
-                    threading.Thread(target=fetch_location_async, args=(new_point,), daemon=True).start()
+                    # Автосохранение
+                    state.save_config()
                     
                     state.pending_google = None
                 continue
@@ -412,13 +422,34 @@ def load_calib():
     success = state.load_config()
     return jsonify(success=success)
 
+@app.route('/api/calibration/import', methods=['POST'])
+def import_calib():
+    try:
+        new_data = request.json
+        if not isinstance(new_data, list):
+            return jsonify(success=False, error="Invalid format")
+            
+        # Валидация
+        valid_count = 0
+        for item in new_data:
+            if 'google' in item and 'yandex' in item:
+                # Добавляем если нет дубликатов
+                is_exist = any(x['google'] == item['google'] and x['yandex'] == item['yandex'] for x in state.training_data)
+                if not is_exist:
+                    if 'location' not in item:
+                        item['location'] = ""
+                    state.training_data.append(item)
+                    valid_count += 1
+        
+        state.save_config()
+        return jsonify(success=True, count=valid_count)
+    except Exception as e:
+        return jsonify(success=False, error=str(e))
+
 @app.route('/api/calibration/export', methods=['POST'])
 def export_calib():
-    output = "ДАННЫЕ КАЛИБРОВКИ:\n"
-    for i, p in enumerate(state.training_data, 1):
-        output += f"{i}. G: {p['google']} | Y: {p['yandex']}\n"
-    pyperclip.copy(output)
-    return jsonify(success=True)
+    # Возвращаем JSON напрямую для скачивания на клиенте
+    return jsonify(state.training_data)
 
 @app.route('/api/clipboard/copy', methods=['POST'])
 def clipboard_copy():
@@ -429,26 +460,17 @@ def clipboard_copy():
 @app.route('/api/calibration/update-locations', methods=['POST'])
 def update_locations():
     """
-    Обновляет местоположения для всех калибровочных точек.
-    Запускается в фоновом потоке.
+    Обновляет местоположения для проблемных точек.
     """
-    def update_all_locations():
-        updated = 0
-        for point in state.training_data:
-            # Обновляем только если местоположение пустое
-            if not point.get('location'):
-                location = get_location_for_point(point)
-                point['location'] = location
-                updated += 1
-        
-        if updated > 0:
-            state.save_config()
-        print(f"Locations updated: {updated}")
+    updated_count = 0
+    for point in state.training_data:
+        loc = point.get('location', '')
+        # Обновляем, если пусто или ошибка
+        if not loc or loc in ["Город не найден", "Не удалось получить данные", "Загрузка..."]:
+             geocoding_service.add_task(point)
+             updated_count += 1
     
-    # Запускаем в фоновом потоке
-    threading.Thread(target=update_all_locations, daemon=True).start()
-    
-    return jsonify(success=True, message="Обновление местоположений запущено")
+    return jsonify(success=True, message=f"В очередь добавлено точек: {updated_count}", count=updated_count)
 
 
 def open_window(port):

@@ -430,24 +430,72 @@ document.addEventListener('DOMContentLoaded', function () {
         } catch (e) { showToast('Ошибка сети', 'error'); }
     }
 
-    async function loadCalibration() {
-        try {
-            const response = await fetch('/api/calibration/load', { method: 'POST' });
-            const data = await response.json();
-            if (data.success) {
-                fetchCalibrationData();
-                showToast('Конфигурация загружена', 'success');
-            }
-            else showToast('Ошибка загрузки', 'error');
-        } catch (e) { showToast('Ошибка сети', 'error'); }
-    }
-
     async function exportCalibration() {
+        // Скачивание файла calibration.json
         try {
             const response = await fetch('/api/calibration/export', { method: 'POST' });
             const data = await response.json();
-            if (data.success) showToast('Скопировано в буфер', 'success');
-        } catch (e) { showToast('Ошибка сети', 'error'); }
+
+            // Создаем Blob и ссылку для скачивания
+            const dataStr = JSON.stringify(data, null, 4);
+            const blob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'calibration.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            showToast('Файл сохранен в Загрузки', 'success');
+        } catch (e) { showToast('Ошибка экспорта', 'error'); }
+    }
+
+    // Скрытый инпут для загрузки файла
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.json';
+    fileInput.style.display = 'none';
+    document.body.appendChild(fileInput);
+
+    fileInput.addEventListener('change', handleFileUpload);
+
+    async function loadCalibration() {
+        // Триггерим клик по скрытому инпуту
+        fileInput.click();
+    }
+
+    async function handleFileUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const json = JSON.parse(e.target.result);
+                // Отправляем на сервер
+                const response = await fetch('/api/calibration/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(json)
+                });
+                const res = await response.json();
+
+                if (res.success) {
+                    showToast(`Импортировано точек: ${res.count}`, 'success');
+                    fetchCalibrationData();
+                } else {
+                    showToast('Ошибка импорта: ' + res.error, 'error');
+                }
+            } catch (err) {
+                showToast('Ошибка чтения файла', 'error');
+            }
+            // Сброс value чтобы можно было выбрать тот же файл снова
+            fileInput.value = '';
+        };
+        reader.readAsText(file);
     }
 
     async function updateLocations() {
