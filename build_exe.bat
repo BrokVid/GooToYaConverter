@@ -11,14 +11,14 @@ if %errorlevel% neq 0 (
     winget --version >nul 2>&1
     if %errorlevel% neq 0 (
         echo Winget not found. Please install Python manually.
-        pause
+        if not defined CI pause
         exit /b 1
     )
     
     winget install -e --id Python.Python.3.12
     if %errorlevel% neq 0 (
         echo Failed to install Python. Please install Python manually and try again.
-        pause
+        if not defined CI pause
         exit /b 1
     )
     
@@ -34,7 +34,7 @@ if %errorlevel% neq 0 (
     REM Try to look in standard installation path for current user (Local AppData) as fallback?
     REM Too complex. Just error out if still not found.
     echo Python command not available yet. Please restart the script/console.
-    pause
+    if not defined CI pause
     exit /b 1
 )
 
@@ -44,7 +44,7 @@ if not exist ".venv" (
     python -m venv .venv
     if %errorlevel% neq 0 (
         echo Failed to create venv.
-        pause
+        if not defined CI pause
         exit /b 1
     )
 )
@@ -53,7 +53,7 @@ echo Activating virtual environment...
 call ".venv\Scripts\activate.bat"
 if %errorlevel% neq 0 (
     echo Failed to activate venv.
-    pause
+    if not defined CI pause
     exit /b 1
 )
 
@@ -63,7 +63,7 @@ if exist "requirements.txt" (
     python -m pip install -r requirements.txt
 ) else (
     echo requirements.txt not found!
-    pause
+    if not defined CI pause
     exit /b 1
 )
 

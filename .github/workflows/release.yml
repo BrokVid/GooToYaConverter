@@ -28,7 +28,7 @@ jobs:
 
       - name: Build exe (PyInstaller, no console)
         run: |
-          build_exe.bat
+          .\build_exe.bat
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
