@@ -172,6 +172,10 @@ class AppState:
         self.last_found_coords = ""
         self.last_result_coords = ""
         self.pending_google = None
+        self.last_result_coords = ""
+        self.pending_google = None
+        self.calibration_status_text = ""
+        self.ignore_text = None
         
         self.config_dir = self.get_config_dir()
         self.config_path = self.config_dir / CONFIG_FILE
@@ -264,6 +268,18 @@ class GeocodingWorker:
             except Exception as e:
                 print(f"Worker error: {e}")
 
+def guess_source_type(text):
+    """Определяет вероятный источник координаты по точности"""
+    matches = re.findall(r'\.(\d+)', text)
+    if not matches: return "Неизвестно"
+    avg_len = sum(len(x) for x in matches) / len(matches)
+    
+    if avg_len > 8.0:
+        return "Google"
+    elif avg_len <= 8.0:
+        return "Yandex"
+    return "Неизвестно"
+
 # --- Initialize Global State ---
 state = AppState()
 state.load_config()
@@ -286,7 +302,6 @@ def check_swap_heuristic(coord1, coord2, current_calibration):
         return coord1, coord2
 
     # Получаем сырые строки чисел для подсчета длины
-    # coord1 = "Lat1, Lon1"
     def get_precision_score(txt):
         # Считаем среднее кол-во знаков после точки
         matches = re.findall(r'\.(\d+)', txt)
@@ -298,23 +313,38 @@ def check_swap_heuristic(coord1, coord2, current_calibration):
     
     print(f"Swap Check Precision: 1={prec1:.1f}, 2={prec2:.1f}")
     
-    # Правило: Google > 8, Yandex < 8.
-    # Если prec1 > 9 и prec2 < 8 => 1=Google, 2=Yandex (Порядок OK)
-    # Если prec1 < 8 и prec2 > 9 => 1=Yandex, 2=Google (SWAP!)
+    # 1. Проверка относительной точности (самая надежная)
+    # Если разница велика (> 2.5), то тот, у кого больше - Google
+    diff = prec2 - prec1
     
-    THRESHOLD_HIGH = 8.5
-    THRESHOLD_LOW = 7.5
+    if diff > 2.5:
+        print(f"Detected SWAP by Relative Precision: diff={diff:.1f}")
+        return coord2, coord1
+    if diff < -2.5:
+        print(f"Order OK by Relative Precision: diff={diff:.1f}")
+        return coord1, coord2
+
+    # 2. Проверка по порогу (User rule: Google > 8, Yandex < 8)
+    # Используем 8.0 как разделитель
+    THRESHOLD = 8.0
     
-    if prec1 < THRESHOLD_LOW and prec2 > THRESHOLD_HIGH:
-        print(f"Detected SWAP by Precision: 1({prec1}) < 2({prec2}). 2 is likely Google.")
+    is_1_short = prec1 <= THRESHOLD
+    is_2_long = prec2 > THRESHOLD
+    
+    if is_1_short and is_2_long:
+        print("Detected SWAP by Threshold")
         return coord2, coord1
         
-    if prec1 > THRESHOLD_HIGH and prec2 < THRESHOLD_LOW:
-        print(f"Order OK by Precision: 1({prec1}) > 2({prec2}). 1 is likely Google.")
+    is_1_long = prec1 > THRESHOLD
+    is_2_short = prec2 <= THRESHOLD
+    
+    if is_1_long and is_2_short:
+        print("Order OK by Threshold")
         return coord1, coord2
         
     # Если по точности непонятно (например оба короткие или оба длинные),
     # используем старую геометрическую проверку
+    print("Precision check inconclusive (both long or both short), using distance...")
     
     c1 = (float(m1.group(1)), float(m1.group(2)))
     c2 = (float(m2.group(1)), float(m2.group(2)))
@@ -353,6 +383,12 @@ def monitor_clipboard_task():
         time.sleep(0.5)
         try:
             text = pyperclip.paste()
+            
+            # Если текст совпадает с тем, что мы пометили как "игнорировать" (из старта калибровки)
+            if state.ignore_text and text == state.ignore_text:
+                state.last_clipboard = text
+                continue
+                
             if not text or text == state.last_clipboard:
                 continue
             
@@ -369,16 +405,37 @@ def monitor_clipboard_task():
             
             if state.is_calibrating:
                 if state.pending_google is None:
+                    # Первая координата
                     state.pending_google = coords_str
+                    src_type = guess_source_type(coords_str)
+                    
+                    if src_type == "Google":
+                        wait_for = "Yandex (короткие)"
+                    elif src_type == "Yandex":
+                        wait_for = "Google (длинные)"
+                    else:
+                        wait_for = "вторую координату"
+                        
+                    state.calibration_status_text = f"Получен {src_type}. Скопируйте {wait_for}..."
                 else:
+                    # Вторая координата
                     raw_1 = state.pending_google
                     raw_2 = coords_str
+                    
+                    # Проверяем, не скопировал ли пользователь то же самое (или очень похожее)
+                    if raw_1 == raw_2:
+                         continue
+
                     final_google, final_yandex = check_swap_heuristic(raw_1, raw_2, state)
+                    
                     new_point = {"google": final_google, "yandex": final_yandex, "location": "Загрузка..."}
                     state.training_data.append(new_point)
                     geocoding_service.add_task(new_point)
                     state.save_config()
+                    
+                    # Сброс
                     state.pending_google = None
+                    state.calibration_status_text = "Координаты добавлены! Скопируйте следующую пару..."
                 continue
 
             glat, glon = float(m.group(1)), float(m.group(2))
@@ -435,6 +492,7 @@ def api_status():
         last_result=state.last_result_coords,
         points_count=len(state.training_data),
         calibration_status=state.is_calibrating,
+        calibration_message=state.calibration_status_text,
         pending_google=state.pending_google is not None
     )
 
@@ -451,18 +509,30 @@ def start_monitoring():
 @app.route('/api/calibration/start', methods=['POST'])
 def start_calibration():
     state.is_calibrating = True
+    # Важно: обновляем буфер и игнорируемый текст, чтобы не реагировать на старое содержимое
+    try:
+        current_clip = pyperclip.paste()
+        state.last_clipboard = current_clip
+        state.ignore_text = current_clip
+    except: pass
+
     if not state.is_monitoring:
         state.is_monitoring = True
         thread = threading.Thread(target=monitor_clipboard_task, daemon=True)
         thread.start()
+        
     state.pending_google = None
+    state.calibration_status_text = "Режим калибровки. Скопируйте первую координату..."
     return jsonify(success=True)
 
 @app.route('/api/monitoring/stop', methods=['POST'])
 def stop_monitoring():
     state.is_monitoring = False
     state.is_calibrating = False
+    state.is_calibrating = False
     state.pending_google = None
+    state.calibration_status_text = ""
+    state.ignore_text = None
     return jsonify(success=True)
 
 @app.route('/api/calibration/data', methods=['GET', 'DELETE'])

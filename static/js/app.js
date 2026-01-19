@@ -179,8 +179,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 // Обновляем статус калибровки
                 if (data.calibration_status) {
                     const statusLabel = document.querySelector('.status-badge');
-                    if (statusLabel && data.calibration_message) {
-                        // Можно добавить вывод сообщения статуса калибровки если нужно
+                    if (data.calibration_message) {
+                        window.lastCalibrationMessage = data.calibration_message;
+                        // Форсируем обновление текста если уже в режиме калибровки
+                        if (isCalibrating) {
+                            elements.statusText.textContent = data.calibration_message;
+                        }
                     }
                 }
 
@@ -212,7 +216,14 @@ document.addEventListener('DOMContentLoaded', function () {
             isCalibrating = false;
         } else if (status === 'calibrating') {
             elements.statusDot.classList.add('calibrating');
-            elements.statusText.textContent = 'Калибровка...';
+
+            // Если есть сообщение от сервера, показываем его
+            if (window.lastCalibrationMessage) {
+                elements.statusText.textContent = window.lastCalibrationMessage;
+            } else {
+                elements.statusText.textContent = 'Калибровка...';
+            }
+
             elements.calibStartBtn.disabled = true;
             elements.calibStopBtn.disabled = false;
             elements.startBtn.disabled = true;
