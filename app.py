@@ -207,6 +207,15 @@ class AppState:
             for point in self.training_data:
                 if 'location' not in point:
                     point['location'] = ""
+                # Если с прошлого запуска остался статус "Загрузка...", сбрасываем его
+                # чтобы не пугать пользователя, что что-то запускается само
+                if point.get('location') in ["Загрузка...", "Loading..."]:
+                    point['location'] = ""
+            
+            # Explicitly ensure monitoring is off on load
+            self.is_monitoring = False
+            self.is_calibrating = False
+            
             return True
         except Exception as e:
             print(f"Error loading config: {e}")
@@ -470,13 +479,14 @@ def calibration_data():
         for item in state.training_data:
             should_delete = False
             for del_item in items_to_delete:
-                if item['google'] == del_item['google'] and item['yandex'] == del_item['yandex']:
+                if item['google'].strip() == del_item['google'].strip() and item['yandex'].strip() == del_item['yandex'].strip():
                     should_delete = True
                     break
             if not should_delete:
                 new_data.append(item)
         
         state.training_data = new_data
+        state.save_config()
         return jsonify(success=True)
 
 @app.route('/api/calibration/save', methods=['POST'])

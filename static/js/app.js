@@ -401,8 +401,8 @@ document.addEventListener('DOMContentLoaded', function () {
         const pointsToDelete = [];
         selectedRows.forEach(row => {
             pointsToDelete.push({
-                google: row.children[1].textContent,
-                yandex: row.children[2].textContent
+                google: row.children[1].textContent.trim(),
+                yandex: row.children[2].textContent.trim()
             });
         });
 
