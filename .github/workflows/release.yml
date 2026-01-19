@@ -30,11 +30,28 @@ jobs:
         run: |
           .\build_exe.bat
 
+      - name: Create ZIP archive
+        run: |
+          Compress-Archive -Path "dist\GoogleToYandexWeb\*" -DestinationPath "GooToYaConverter-${{ github.ref_name }}.zip"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/GoogleToYandexWeb/GoogleToYandexWeb.exe
+            GooToYaConverter-${{ github.ref_name }}.zip
+          body: |
+            ## 🗺️ GooToYaConverter ${{ github.ref_name }}
+            
+            Конвертер координат Google Maps → Яндекс.Карты
+            
+            ### 📥 Установка
+            1. Скачайте архив `GooToYaConverter-${{ github.ref_name }}.zip`
+            2. Распакуйте архив в любую папку
+            3. Запустите `GoogleToYandexWeb.exe`
+            
+            ### ✨ Возможности
+            - Автоматическая конвертация координат из буфера обмена
+            - Калибровка для вашего города
+            - Интерактивная карта всех откалиброванных точек
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
