@@ -80,7 +80,7 @@ body::before {
 
 /* === КОНТЕЙНЕР ПРИЛОЖЕНИЯ === */
 .app-container {
-    max-width: 760px;
+    max-width: 780px;
     margin: 0 auto;
     padding: 16px 20px;
     min-height: 100vh;
@@ -271,12 +271,30 @@ body::before {
     padding: 16px 18px 18px;
 }
 
+/* === ГОРИЗОНТАЛЬНАЯ КОМПОНОВКА ДЛЯ БЛОКОВ КОНВЕРТАЦИИ === */
+.conversion-blocks {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: stretch;
+    /* Блоки равной высоты */
+}
+
+.conversion-blocks .card {
+    display: flex;
+    flex-direction: column;
+}
+
+.conversion-blocks .card-body {
+    flex: 1;
+    /* Растягиваем body на всю доступную высоту */
+}
+
 /* === СЕКЦИЯ РУЧНОЙ КОНВЕРТАЦИИ === */
 .conversion-grid {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    gap: 14px;
-    align-items: end;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .input-group {
@@ -381,16 +399,18 @@ body::before {
 
 .btn-convert {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    padding: 10px 14px;
+    gap: 8px;
+    height: 40px;
+    /* Высота как в дизайне */
+    padding: 0 14px;
     background: var(--primary-gradient);
     border: none;
     border-radius: var(--border-radius-sm);
     color: white;
-    font-size: 0.8rem;
+    font-size: 0.85rem;
     font-weight: 600;
     cursor: pointer;
     transition: var(--transition-normal);
@@ -572,7 +592,8 @@ body::before {
 
 /* === ТАБЛИЦА === */
 .table-container {
-    max-height: 240px;
+    max-height: 340px;
+    /* Увеличена высота на 100px (было 240px) */
     overflow-y: auto;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
@@ -653,10 +674,12 @@ body::before {
     font-size: 0.85rem;
     padding-top: 10px;
     padding-bottom: 10px;
-    text-align: center;
+    text-align: left;
+    /* Выравнивание по левому краю */
+    padding-left: 16px;
+    /* Добавлен отступ слева */
     letter-spacing: 0.5px;
     position: relative;
-    /* For chevron if we add one */
 }
 
 /* Скрытые ряды при сворачивании */

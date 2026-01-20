@@ -95,6 +95,36 @@ def convert_coords_advanced(glat, glon, calibration_data):
     final_dlon = sum_dlon / total_weight
     return f"{(glat + final_dlat):.6f}, {(glon + final_dlon):.6f}"
 
+def wait_for_new_paste(timeout=None):
+    """
+    Ожидает новое содержимое в буфере обмена.
+    Эквивалент pyperclip.waitForNewPaste() для версий, где эта функция недоступна.
+    
+    Args:
+        timeout: максимальное время ожидания в секундах (None = бесконечно)
+    
+    Returns:
+        Новое содержимое буфера обмена
+        
+    Raises:
+        TimeoutError: если таймаут истек
+    """
+    initial_content = pyperclip.paste()
+    start_time = time.time()
+    
+    while True:
+        time.sleep(0.1)  # Проверяем каждые 100ms
+        current_content = pyperclip.paste()
+        
+        if current_content != initial_content:
+            return current_content
+            
+        if timeout is not None:
+            elapsed = time.time() - start_time
+            if elapsed >= timeout:
+                raise TimeoutError(f'wait_for_new_paste() timed out after {timeout} seconds.')
+
+
 def reverse_geocode(lat, lon):
     """
     Получает название города и страны по координатам через Nominatim (OpenStreetMap).
@@ -175,7 +205,6 @@ class AppState:
         self.last_result_coords = ""
         self.pending_google = None
         self.calibration_status_text = ""
-        self.ignore_text = None
         
         self.config_dir = self.get_config_dir()
         self.config_path = self.config_dir / CONFIG_FILE
@@ -379,33 +408,37 @@ def check_swap_heuristic(coord1, coord2, current_calibration):
 
 # --- ФОНОВЫЙ МОНИТОРИНГ ---
 def monitor_clipboard_task():
+    """
+    Мониторинг буфера обмена. Использует wait_for_new_paste() для ожидания 
+    ТОЛЬКО новых данных в буфере.
+    """
     while state.is_monitoring:
-        time.sleep(0.5)
         try:
-            text = pyperclip.paste()
-            
-            # Если текст совпадает с тем, что мы пометили как "игнорировать" (из старта калибровки)
-            if state.ignore_text and text == state.ignore_text:
-                state.last_clipboard = text
-                continue
-                
-            if not text or text == state.last_clipboard:
+            # Ждем НОВОЕ содержимое буфера обмена (блокирующий вызов с таймаутом)
+            try:
+                text = wait_for_new_paste(timeout=1)
+            except TimeoutError:
+                # Таймаут - просто продолжаем цикл
                 continue
             
-            if len(text) > 5000:
-                state.last_clipboard = text
+            # Проверка длины текста
+            if not text or len(text) > 5000:
                 continue
-                
+            
+            # Обновляем последний буфер
             state.last_clipboard = text
+            
+            # Ищем координаты в тексте
             m = coord_re.search(text)
             if not m:
                 continue
                 
             coords_str = f"{m.group(1)}, {m.group(2)}"
             
+            # === РЕЖИМ КАЛИБРОВКИ ===
             if state.is_calibrating:
                 if state.pending_google is None:
-                    # Первая координата
+                    # Получена ПЕРВАЯ координата
                     state.pending_google = coords_str
                     src_type = guess_source_type(coords_str)
                     
@@ -417,41 +450,93 @@ def monitor_clipboard_task():
                         wait_for = "вторую координату"
                         
                     state.calibration_status_text = f"Получен {src_type}. Скопируйте {wait_for}..."
+                    print(f"[CALIBRATION] First coord received: {src_type}")
                 else:
-                    # Вторая координата
+                    # Получена ВТОРАЯ координата
                     raw_1 = state.pending_google
                     raw_2 = coords_str
                     
-                    # Проверяем, не скопировал ли пользователь то же самое (или очень похожее)
+                    # Проверяем, что это точно разные координаты (не та же самая)
                     if raw_1 == raw_2:
-                         continue
-
+                        print("[CALIBRATION] Same coordinate copied twice, ignoring")
+                        continue
+                    
+                    # Определяем типы обеих координат
+                    type_1 = guess_source_type(raw_1)
+                    type_2 = guess_source_type(raw_2)
+                    
+                    print(f"[CALIBRATION] Coord 1: {type_1}, Coord 2: {type_2}")
+                    
+                    # Проверяем, что форматы РАЗНЫЕ
+                    if type_1 == type_2:
+                        state.calibration_status_text = f"⚠️ Обе координаты {type_1}! Нужна пара: Google + Yandex"
+                        print(f"[CALIBRATION] Both coordinates are {type_1}, rejected")
+                        # НЕ сбрасываем pending_google, ждем правильную вторую координату
+                        continue
+                    
+                    # Если типы разные, определяем правильный порядок: Google, потом Yandex
                     final_google, final_yandex = check_swap_heuristic(raw_1, raw_2, state)
                     
-                    new_point = {"google": final_google, "yandex": final_yandex, "location": "Загрузка..."}
+                    # Показываем статус "Определяю город..."
+                    state.calibration_status_text = "🌍 Определяю местоположение..."
+                    
+                    # Получаем местоположение СИНХРОННО (до добавления в таблицу)
+                    try:
+                        m_google = coord_re.search(final_google)
+                        if m_google:
+                            lat, lon = float(m_google.group(1)), float(m_google.group(2))
+                            # Задержка для соблюдения rate limit
+                            time.sleep(1.2)
+                            location = reverse_geocode(lat, lon)
+                        else:
+                            location = "Город не найден"
+                    except Exception as e:
+                        print(f"Geocoding error during calibration: {e}")
+                        location = "Город не найден"
+                    
+                    # Создаем новую точку с уже определенным местоположением
+                    new_point = {
+                        "google": final_google, 
+                        "yandex": final_yandex, 
+                        "location": location
+                    }
+                    
+                    # Добавляем в таблицу
                     state.training_data.append(new_point)
-                    geocoding_service.add_task(new_point)
                     state.save_config()
                     
-                    # Сброс
+                    print(f"[CALIBRATION] Added: {location} | G: {final_google} | Y: {final_yandex}")
+                    
+                    # Сбрасываем состояние для следующей пары
                     state.pending_google = None
-                    state.calibration_status_text = "Координаты добавлены! Скопируйте следующую пару..."
+                    state.calibration_status_text = f"✅ Добавлено: {location}. Скопируйте следующую пару..."
+                
+                # В режиме калибровки не делаем конвертацию
                 continue
 
+            # === РЕЖИМ РАБОТЫ (Конвертация) ===
             glat, glon = float(m.group(1)), float(m.group(2))
+            
+            # Валидация координат
             if len(m.group(1)) < 2 and len(m.group(2)) < 2: 
                 continue
 
+            # Конвертация
             calib_list = state.get_calib_list()
             res = convert_coords_advanced(glat, glon, calib_list)
             
+            # Копируем результат в буфер
             pyperclip.copy(res)
             state.last_clipboard = res
             state.last_found_coords = coords_str
             state.last_result_coords = res
             
+            print(f"[CONVERT] {coords_str} -> {res}")
+            
         except Exception as e:
             print(f"Monitor error: {e}")
+            import traceback
+            traceback.print_exc()
             state.is_monitoring = False
             break
 
@@ -509,12 +594,6 @@ def start_monitoring():
 @app.route('/api/calibration/start', methods=['POST'])
 def start_calibration():
     state.is_calibrating = True
-    # Важно: обновляем буфер и игнорируемый текст, чтобы не реагировать на старое содержимое
-    try:
-        current_clip = pyperclip.paste()
-        state.last_clipboard = current_clip
-        state.ignore_text = current_clip
-    except: pass
 
     if not state.is_monitoring:
         state.is_monitoring = True
@@ -532,7 +611,6 @@ def stop_monitoring():
     state.is_calibrating = False
     state.pending_google = None
     state.calibration_status_text = ""
-    state.ignore_text = None
     return jsonify(success=True)
 
 @app.route('/api/calibration/data', methods=['GET', 'DELETE'])
@@ -625,8 +703,8 @@ def open_window(port):
     url = f'http://127.0.0.1:{port}'
     print(f"Opening... {url}")
 
-    # Размер окна для режима app (Edge/Chrome)
-    win_w, win_h = 820, 620
+    # Размер окна для режима app (Edge/Chrome) - фиксированный 780x700
+    win_w, win_h = 780, 700
     win_x, win_y = 80, 60
     
     # Попытка открыть Edge в режиме App (Windows)
@@ -660,8 +738,8 @@ if __name__ == '__main__':
                 'Google → Yandex Coords Pro', 
                 app,
                 width=780,
-                height=600,
-                resizable=True,
+                height=700,
+                resizable=True,  # Разрешаем изменение размера
                 min_size=(560, 440),
                 background_color='#0f0f23'
             )
