@@ -648,6 +648,132 @@
         "marker-size": "medium",
         "marker-symbol": "circle"
       }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          60.51777130149208,
+          56.878085564406845
+        ]
+      },
+      "properties": {
+        "title": "Калибровочная точка #37",
+        "google": "56.878085564406845, 60.51777130149208",
+        "yandex": "56.878078, 60.517790",
+        "marker-color": "#FF6B6B",
+        "marker-size": "medium",
+        "marker-symbol": "circle"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          60.54399580094718,
+          56.86183422176067
+        ]
+      },
+      "properties": {
+        "title": "Калибровочная точка #38",
+        "google": "56.86183422176067, 60.54399580094718",
+        "yandex": "56.861826, 60.544010",
+        "marker-color": "#FF6B6B",
+        "marker-size": "medium",
+        "marker-symbol": "circle"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          60.61196622535189,
+          56.87861715843475
+        ]
+      },
+      "properties": {
+        "title": "Калибровочная точка #39",
+        "google": "56.87861715843475, 60.61196622535189",
+        "yandex": "56.878599, 60.611985",
+        "marker-color": "#FF6B6B",
+        "marker-size": "medium",
+        "marker-symbol": "circle"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          60.65418435676411,
+          56.83848265794138
+        ]
+      },
+      "properties": {
+        "title": "Калибровочная точка #40",
+        "google": "56.83848265794138, 60.65418435676411",
+        "yandex": "56.838472, 60.654208",
+        "marker-color": "#FF6B6B",
+        "marker-size": "medium",
+        "marker-symbol": "circle"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          60.60928730116667,
+          56.74065097997891
+        ]
+      },
+      "properties": {
+        "title": "Калибровочная точка #41",
+        "google": "56.74065097997891, 60.60928730116667",
+        "yandex": "56.740645, 60.609302",
+        "marker-color": "#FF6B6B",
+        "marker-size": "medium",
+        "marker-symbol": "circle"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          60.52168659345307,
+          56.83366551760341
+        ]
+      },
+      "properties": {
+        "title": "Калибровочная точка #42",
+        "google": "56.83366551760341, 60.52168659345307",
+        "yandex": "56.833658, 60.521703",
+        "marker-color": "#FF6B6B",
+        "marker-size": "medium",
+        "marker-symbol": "circle"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          60.69892395768985,
+          56.749716761414234
+        ]
+      },
+      "properties": {
+        "title": "Калибровочная точка #43",
+        "google": "56.749716761414234, 60.69892395768985",
+        "yandex": "56.749710, 60.698944",
+        "marker-color": "#FF6B6B",
+        "marker-size": "medium",
+        "marker-symbol": "circle"
+      }
     }
   ]
 }
