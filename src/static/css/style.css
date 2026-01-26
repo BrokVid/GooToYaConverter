@@ -277,7 +277,6 @@ body::before {
     grid-template-columns: 1fr 1fr;
     gap: 16px;
     align-items: stretch;
-    /* Блоки равной высоты */
 }
 
 .conversion-blocks .card {
@@ -287,7 +286,6 @@ body::before {
 
 .conversion-blocks .card-body {
     flex: 1;
-    /* Растягиваем body на всю доступную высоту */
 }
 
 /* === СЕКЦИЯ РУЧНОЙ КОНВЕРТАЦИИ === */
@@ -404,7 +402,6 @@ body::before {
     justify-content: center;
     gap: 8px;
     height: 40px;
-    /* Высота как в дизайне */
     padding: 0 14px;
     background: var(--primary-gradient);
     border: none;
@@ -593,7 +590,6 @@ body::before {
 /* === ТАБЛИЦА === */
 .table-container {
     max-height: 340px;
-    /* Увеличена высота на 100px (было 240px) */
     overflow-y: auto;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
@@ -631,7 +627,6 @@ body::before {
 
 .calib-table th {
     background: #1e1e32;
-    /* Full solid background matching card color to prevent transparency issues */
     font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
@@ -640,9 +635,7 @@ body::before {
     position: sticky;
     top: 0;
     z-index: 10;
-    /* Adding a bottom border to separate from content if needed, though already present in th/td */
     box-shadow: 0 1px 0 var(--border-color);
-    /* better than border for sticky */
 }
 
 .calib-table tbody tr {
@@ -668,16 +661,13 @@ body::before {
 
 .calib-table tbody tr.group-header td {
     background: rgba(255, 255, 255, 0.08);
-    /* Slightly lighter than header */
     color: var(--primary-color);
     font-weight: 700;
     font-size: 0.85rem;
     padding-top: 10px;
     padding-bottom: 10px;
     text-align: left;
-    /* Выравнивание по левому краю */
     padding-left: 16px;
-    /* Добавлен отступ слева */
     letter-spacing: 0.5px;
     position: relative;
 }

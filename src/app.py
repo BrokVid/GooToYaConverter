@@ -5,6 +5,7 @@ import math
 import re
 import threading
 import time
+import queue
 import pyperclip
 import webbrowser
 import subprocess
@@ -13,16 +14,18 @@ import urllib.parse
 from pathlib import Path
 from flask import Flask, render_template, jsonify, request
 
-# Попытка импорта pywebview (опционально)
+# Проверка наличия pywebview
 try:
     import webview
     HAS_WEBVIEW = True
 except ImportError:
     HAS_WEBVIEW = False
 
-# --- ЛОГИКА КОНВЕРТАЦИИ И КОНСТАНТЫ ---
+# === КОНСТАНТЫ ===
 
-CONFIG_FILE = "calibration.json"
+CONFIG_FILENAME = "calibration.json"
+
+# Базовые калибровочные точки
 BASE_CALIBRATION = [
     ((56.82811805737119, 60.61426164412377), (56.828106, 60.614287)),
     ((56.86259891560065, 60.6572500903253), (56.862586, 60.657278)),
@@ -57,17 +60,26 @@ BASE_CALIBRATION = [
     ((51.8242809475715, 107.57781015145557), (51.824287, 107.577818))
 ]
 
+# Коэффициенты линейного преобразования (fallback)
 DEFAULT_A, DEFAULT_B, DEFAULT_C = 1.00002178, -0.000409512697, 0.0235679088
 DEFAULT_D, DEFAULT_E, DEFAULT_F = -0.0000552760272, 0.99995881, 0.00565924534
+
+# Регулярное выражение для парсинга координат
 coord_re = re.compile(r'([-+]?\d*\.\d+),\s*([-+]?\d*\.\d+)')
 
+
+# === ФУНКЦИИ КОНВЕРТАЦИИ ===
+
 def get_distance(lat1, lon1, lat2, lon2):
+    """Вычисляет расстояние между двумя точками (упрощённая формула)."""
     avg_lat = math.radians((lat1 + lat2) / 2.0)
     dlat = lat1 - lat2
     dlon = (lon1 - lon2) * math.cos(avg_lat)
     return math.sqrt(dlat**2 + dlon**2)
 
+
 def convert_coords_advanced(glat, glon, calibration_data):
+    """Конвертирует координаты Google в Yandex методом IDW-интерполяции."""
     if not calibration_data:
         ylat = DEFAULT_A * glat + DEFAULT_B * glon + DEFAULT_C
         ylon = DEFAULT_D * glat + DEFAULT_E * glon + DEFAULT_F
@@ -76,11 +88,11 @@ def convert_coords_advanced(glat, glon, calibration_data):
     total_weight = 0
     sum_dlat = 0
     sum_dlon = 0
-    p = 2 
+    p = 2
 
     for (g_lat, g_lon), (y_lat, y_lon) in calibration_data:
         dist = get_distance(glat, glon, g_lat, g_lon)
-        if dist < 0.0000001: 
+        if dist < 0.0000001:
             return f"{y_lat:.6f}, {y_lon:.6f}"
         
         weight = 1.0 / (dist ** p)
@@ -95,25 +107,16 @@ def convert_coords_advanced(glat, glon, calibration_data):
     final_dlon = sum_dlon / total_weight
     return f"{(glat + final_dlat):.6f}, {(glon + final_dlon):.6f}"
 
+
+# === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
+
 def wait_for_new_paste(timeout=None):
-    """
-    Ожидает новое содержимое в буфере обмена.
-    Эквивалент pyperclip.waitForNewPaste() для версий, где эта функция недоступна.
-    
-    Args:
-        timeout: максимальное время ожидания в секундах (None = бесконечно)
-    
-    Returns:
-        Новое содержимое буфера обмена
-        
-    Raises:
-        TimeoutError: если таймаут истек
-    """
+    """Ожидает новое содержимое в буфере обмена."""
     initial_content = pyperclip.paste()
     start_time = time.time()
     
     while True:
-        time.sleep(0.1)  # Проверяем каждые 100ms
+        time.sleep(0.1)
         current_content = pyperclip.paste()
         
         if current_content != initial_content:
@@ -122,28 +125,19 @@ def wait_for_new_paste(timeout=None):
         if timeout is not None:
             elapsed = time.time() - start_time
             if elapsed >= timeout:
-                raise TimeoutError(f'wait_for_new_paste() timed out after {timeout} seconds.')
+                raise TimeoutError(f'Таймаут ожидания: {timeout} сек.')
 
 
 def reverse_geocode(lat, lon):
-    """
-    Получает название города и страны по координатам через Nominatim (OpenStreetMap).
-    Возвращает строку вида "Город, Страна" на русском языке.
-    """
+    """Получает название города по координатам через Nominatim API."""
     try:
-        # Nominatim API - бесплатный, без ключей
         url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&accept-language=ru"
-        
-        # Добавляем User-Agent (обязательно для Nominatim)
         req = urllib.request.Request(url, headers={'User-Agent': 'GooToYaConverter/1.0'})
         
-        # Делаем запрос с таймаутом
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode('utf-8'))
-            
             address = data.get('address', {})
             
-            # Пытаемся получить город из разных полей
             city = (address.get('city') or 
                    address.get('town') or 
                    address.get('village') or 
@@ -153,7 +147,6 @@ def reverse_geocode(lat, lon):
             
             country = address.get('country', '')
             
-            # Формируем результат
             if city and country:
                 return f"{city}, {country}"
             elif city:
@@ -163,36 +156,50 @@ def reverse_geocode(lat, lon):
             else:
                 return "Город не найден"
                 
-    except urllib.error.HTTPError:
-        return "Не удалось получить данные"
-    except urllib.error.URLError:
+    except (urllib.error.HTTPError, urllib.error.URLError):
         return "Не удалось получить данные"
     except Exception as e:
-        print(f"Geocoding error: {e}")
+        print(f"Ошибка геокодинга: {e}")
         return "Город не найден"
 
-# --- СЛУЖЕБНЫЕ КЛАССЫ И ГЛОБАЛЬНОЕ СОСТОЯНИЕ ---
 
-# Очередь должна быть определена до использования
-import queue
+def guess_source_type(text):
+    """
+    Определяет источник координаты по количеству знаков после запятой.
+    Если знаков > 7 — это Google, если <= 7 — Yandex.
+    """
+    matches = re.findall(r'\.(\d+)', text)
+    if not matches:
+        return "Неизвестно"
+    
+    # Берем максимальную точность из найденных чисел (обычно их два: широта и долгота)
+    max_precision = max(len(x) for x in matches)
+    
+    if max_precision > 7:
+        return "Google"
+    else:
+        return "Yandex"
 
-# --- Helper Functions ---
+
 def get_location_for_point_sync(point_data):
-    """Синхронная версия получения локации (с задержкой)"""
+    """Синхронно получает местоположение для точки калибровки."""
     try:
         coords_str = point_data.get('google', '')
         m = coord_re.search(coords_str)
         if m:
             lat, lon = float(m.group(1)), float(m.group(2))
-            # Задержка ПЕРЕД запросом, чтобы гарантировать интервал между вызовами
-            time.sleep(1.2) 
+            time.sleep(1.2)  # Rate limit для Nominatim
             return reverse_geocode(lat, lon)
     except Exception as e:
-        print(f"Error getting location: {e}")
+        print(f"Ошибка получения локации: {e}")
     return "Город не найден"
 
-# --- Classes ---
+
+# === КЛАССЫ ===
+
 class AppState:
+    """Состояние приложения: калибровочные данные и флаги режимов."""
+    
     def __init__(self):
         self.training_data = []
         self.is_monitoring = False
@@ -202,35 +209,52 @@ class AppState:
         self.last_found_coords = ""
         self.last_result_coords = ""
         self.pending_google = None
-        self.last_result_coords = ""
-        self.pending_google = None
         self.calibration_status_text = ""
         
-        self.config_dir = self.get_config_dir()
-        self.config_path = self.config_dir / CONFIG_FILE
+        # Определяем, запущено ли приложение из EXE или из исходников
+        self.is_frozen = getattr(sys, 'frozen', False)
+        
+        if self.is_frozen:
+            # Запущено из EXE (PyInstaller) — используем AppData
+            self.config_dir = self.get_appdata_dir()
+            self.config_path = self.config_dir / CONFIG_FILENAME
+        else:
+            # Запущено из исходников — используем папку проекта
+            project_root = Path(__file__).resolve().parent.parent  # src -> корень проекта
+            self.config_dir = project_root / 'data'
+            self.config_path = self.config_dir / CONFIG_FILENAME
         
         try:
             os.makedirs(self.config_dir, exist_ok=True)
         except Exception as e:
-            print(f"Error creating config dir: {e}")
+            print(f"Ошибка создания директории: {e}")
 
     def get_resource_path(self, relative_path):
-        try:
+        """Возвращает путь к ресурсу (для PyInstaller)."""
+        if self.is_frozen:
+            # Запущено из EXE — ресурсы в временной папке
             base_path = sys._MEIPASS
-        except Exception:
-            base_path = os.path.abspath(".")
+        else:
+            # Запущено из исходников — ресурсы в папке src/
+            base_path = os.path.dirname(os.path.abspath(__file__))
         return os.path.join(base_path, relative_path)
 
-    def get_config_dir(self):
+    def get_appdata_dir(self):
+        """Возвращает путь к директории конфигурации в AppData."""
         app_data = os.getenv('APPDATA')
         if not app_data:
             app_data = os.path.expanduser("~")
         return Path(app_data) / "GooToYaConverter"
 
     def load_config(self):
+        """Загружает калибровочные данные из файла."""
         try:
             if not os.path.exists(self.config_path):
-                initial = [{"google": f"{g[0]}, {g[1]}", "yandex": f"{y[0]}, {y[1]}", "location": ""} for g, y in BASE_CALIBRATION]
+                initial = [{
+                    "google": f"{g[0]}, {g[1]}", 
+                    "yandex": f"{y[0]}, {y[1]}", 
+                    "location": ""
+                } for g, y in BASE_CALIBRATION]
                 with open(self.config_path, 'w', encoding='utf-8') as f:
                     json.dump(initial, f, indent=4, ensure_ascii=False)
             
@@ -240,54 +264,60 @@ class AppState:
             for point in self.training_data:
                 if 'location' not in point:
                     point['location'] = ""
-                # Если с прошлого запуска остался статус "Загрузка...", сбрасываем его
-                # чтобы не пугать пользователя, что что-то запускается само
                 if point.get('location') in ["Загрузка...", "Loading..."]:
                     point['location'] = ""
             
-            # Explicitly ensure monitoring is off on load
             self.is_monitoring = False
             self.is_calibrating = False
             
             return True
         except Exception as e:
-            print(f"Error loading config: {e}")
+            print(f"Ошибка загрузки конфига: {e}")
             return False
 
     def save_config(self):
+        """Сохраняет калибровочные данные в файл."""
         try:
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(self.training_data, f, indent=4, ensure_ascii=False)
             return True
         except Exception as e:
-            print(f"Error saving config: {e}")
+            print(f"Ошибка сохранения конфига: {e}")
             return False
             
     def get_calib_list(self):
+        """Возвращает список калибровочных точек для конвертации."""
         calib_list = []
         for p in self.training_data:
             try:
                 g_l, g_o = map(float, p["google"].split(", "))
                 y_l, y_o = map(float, p["yandex"].split(", "))
                 calib_list.append(((g_l, g_o), (y_l, y_o)))
-            except: continue
+            except:
+                continue
         return calib_list
 
+
 class GeocodingWorker:
+    """Фоновый воркер для определения местоположения."""
+    
     def __init__(self):
         self.queue = queue.Queue()
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.thread.start()
     
     def add_task(self, point):
+        """Добавляет точку в очередь на геокодинг."""
         point['location'] = "Загрузка..."
         self.queue.put(point)
     
     def _worker(self):
+        """Обрабатывает очередь геокодинга."""
         while True:
             try:
                 point = self.queue.get()
-                if point is None: break
+                if point is None:
+                    break
                 
                 location = get_location_for_point_sync(point)
                 point['location'] = location
@@ -295,140 +325,50 @@ class GeocodingWorker:
                 
                 self.queue.task_done()
             except Exception as e:
-                print(f"Worker error: {e}")
+                print(f"Ошибка воркера: {e}")
 
-def guess_source_type(text):
-    """Определяет вероятный источник координаты по точности"""
-    matches = re.findall(r'\.(\d+)', text)
-    if not matches: return "Неизвестно"
-    avg_len = sum(len(x) for x in matches) / len(matches)
-    
-    if avg_len > 8.0:
-        return "Google"
-    elif avg_len <= 8.0:
-        return "Yandex"
-    return "Неизвестно"
 
-# --- Initialize Global State ---
+# === ИНИЦИАЛИЗАЦИЯ ===
+
 state = AppState()
 state.load_config()
 geocoding_service = GeocodingWorker()
 
-def check_swap_heuristic(coord1, coord2, current_calibration):
+
+# === ЛОГИКА ОПРЕДЕЛЕНИЯ ПОРЯДКА КООРДИНАТ ===
+
+def check_swap_heuristic(coord1, coord2, state=None):
     """
-    Определяет порядок координат на основе:
-    1. Точности (количества знаков после запятой).
-       По наблюдению пользователя: Google > 8 знаков, Яндекс < 8 знаков.
-    2. Если точность не дает результата, используем геометрическую проверку (distance).
-    
-    Возвращает (google_str, yandex_str).
+    Определяет правильный порядок координат: (Google, Yandex).
+    Использует правило: у Google больше 7 знаков после запятой (через guess_source_type).
     """
-    # Парсим для проверки координат
-    m1 = coord_re.search(coord1)
-    m2 = coord_re.search(coord2)
+    type1 = guess_source_type(coord1)
+    type2 = guess_source_type(coord2)
     
-    if not m1 or not m2:
-        return coord1, coord2
-
-    # Получаем сырые строки чисел для подсчета длины
-    def get_precision_score(txt):
-        # Считаем среднее кол-во знаков после точки
-        matches = re.findall(r'\.(\d+)', txt)
-        if not matches: return 0
-        return sum(len(x) for x in matches) / len(matches)
-
-    prec1 = get_precision_score(coord1)
-    prec2 = get_precision_score(coord2)
-    
-    print(f"Swap Check Precision: 1={prec1:.1f}, 2={prec2:.1f}")
-    
-    # 1. Проверка относительной точности (самая надежная)
-    # Если разница велика (> 2.5), то тот, у кого больше - Google
-    diff = prec2 - prec1
-    
-    if diff > 2.5:
-        print(f"Detected SWAP by Relative Precision: diff={diff:.1f}")
-        return coord2, coord1
-    if diff < -2.5:
-        print(f"Order OK by Relative Precision: diff={diff:.1f}")
-        return coord1, coord2
-
-    # 2. Проверка по порогу (User rule: Google > 8, Yandex < 8)
-    # Используем 8.0 как разделитель
-    THRESHOLD = 8.0
-    
-    is_1_short = prec1 <= THRESHOLD
-    is_2_long = prec2 > THRESHOLD
-    
-    if is_1_short and is_2_long:
-        print("Detected SWAP by Threshold")
+    # Если первая — Yandex, а вторая — Google, меняем их местами
+    if type1 == "Yandex" and type2 == "Google":
         return coord2, coord1
         
-    is_1_long = prec1 > THRESHOLD
-    is_2_short = prec2 <= THRESHOLD
-    
-    if is_1_long and is_2_short:
-        print("Order OK by Threshold")
-        return coord1, coord2
-        
-    # Если по точности непонятно (например оба короткие или оба длинные),
-    # используем старую геометрическую проверку
-    print("Precision check inconclusive (both long or both short), using distance...")
-    
-    c1 = (float(m1.group(1)), float(m1.group(2)))
-    c2 = (float(m2.group(1)), float(m2.group(2)))
-    
-    calib_list = state.get_calib_list()
-    
-    def predict(lat, lon):
-        if not calib_list:
-             ylat = DEFAULT_A * lat + DEFAULT_B * lon + DEFAULT_C
-             ylon = DEFAULT_D * lat + DEFAULT_E * lon + DEFAULT_F
-             return ylat, ylon
-        res_str = convert_coords_advanced(lat, lon, calib_list)
-        try:
-            r_lat, r_lon = map(float, res_str.split(','))
-            return r_lat, r_lon
-        except:
-             return lat, lon
+    return coord1, coord2
 
-    p1_lat, p1_lon = predict(c1[0], c1[1])
-    err1 = get_distance(p1_lat, p1_lon, c2[0], c2[1])
-    
-    p2_lat, p2_lon = predict(c2[0], c2[1])
-    err2 = get_distance(p2_lat, p2_lon, c1[0], c1[1])
-    
-    print(f"Swap Check Distance: G->Y error={err1:.7f}, Y->G error={err2:.7f}")
-    
-    if err2 < err1:
-        print("Detected SWAP by Distance")
-        return coord2, coord1
-    else:
-        return coord1, coord2
 
-# --- ФОНОВЫЙ МОНИТОРИНГ ---
+# === МОНИТОРИНГ БУФЕРА ОБМЕНА ===
+
 def monitor_clipboard_task():
-    """
-    Мониторинг буфера обмена. Использует wait_for_new_paste() для ожидания 
-    ТОЛЬКО новых данных в буфере.
-    """
+    """Фоновый мониторинг буфера обмена для конвертации/калибровки."""
     while state.is_monitoring:
         try:
-            # Ждем НОВОЕ содержимое буфера обмена (блокирующий вызов с таймаутом)
+            # Ожидаем новое содержимое
             try:
                 text = wait_for_new_paste(timeout=1)
             except TimeoutError:
-                # Таймаут - просто продолжаем цикл
                 continue
             
-            # Проверка длины текста
             if not text or len(text) > 5000:
                 continue
             
-            # Обновляем последний буфер
             state.last_clipboard = text
             
-            # Ищем координаты в тексте
             m = coord_re.search(text)
             if not m:
                 continue
@@ -438,7 +378,7 @@ def monitor_clipboard_task():
             # === РЕЖИМ КАЛИБРОВКИ ===
             if state.is_calibrating:
                 if state.pending_google is None:
-                    # Получена ПЕРВАЯ координата
+                    # Первая координата пары
                     state.pending_google = coords_str
                     src_type = guess_source_type(coords_str)
                     
@@ -450,108 +390,114 @@ def monitor_clipboard_task():
                         wait_for = "вторую координату"
                         
                     state.calibration_status_text = f"Получен {src_type}. Скопируйте {wait_for}..."
-                    print(f"[CALIBRATION] First coord received: {src_type}")
+                    print(f"[КАЛИБРОВКА] Первая координата: {src_type}")
                 else:
-                    # Получена ВТОРАЯ координата
+                    # Вторая координата пары
                     raw_1 = state.pending_google
                     raw_2 = coords_str
                     
-                    # Проверяем, что это точно разные координаты (не та же самая)
                     if raw_1 == raw_2:
-                        print("[CALIBRATION] Same coordinate copied twice, ignoring")
+                        print("[КАЛИБРОВКА] Одинаковые координаты, пропуск")
                         continue
                     
-                    # Определяем типы обеих координат
                     type_1 = guess_source_type(raw_1)
                     type_2 = guess_source_type(raw_2)
                     
-                    print(f"[CALIBRATION] Coord 1: {type_1}, Coord 2: {type_2}")
+                    print(f"[КАЛИБРОВКА] Координата 1: {type_1}, Координата 2: {type_2}")
                     
-                    # Проверяем, что форматы РАЗНЫЕ
+                    # Проверка что типы разные
                     if type_1 == type_2:
                         state.calibration_status_text = f"⚠️ Обе координаты {type_1}! Нужна пара: Google + Yandex"
-                        print(f"[CALIBRATION] Both coordinates are {type_1}, rejected")
-                        # НЕ сбрасываем pending_google, ждем правильную вторую координату
+                        print(f"[КАЛИБРОВКА] Обе координаты {type_1}, отклонено")
                         continue
                     
-                    # Если типы разные, определяем правильный порядок: Google, потом Yandex
+                    # Определяем порядок: Google, потом Yandex
                     final_google, final_yandex = check_swap_heuristic(raw_1, raw_2, state)
                     
-                    # Показываем статус "Определяю город..."
                     state.calibration_status_text = "🌍 Определяю местоположение..."
                     
-                    # Получаем местоположение СИНХРОННО (до добавления в таблицу)
+                    # Получаем местоположение синхронно
                     try:
                         m_google = coord_re.search(final_google)
                         if m_google:
                             lat, lon = float(m_google.group(1)), float(m_google.group(2))
-                            # Задержка для соблюдения rate limit
                             time.sleep(1.2)
                             location = reverse_geocode(lat, lon)
                         else:
                             location = "Город не найден"
                     except Exception as e:
-                        print(f"Geocoding error during calibration: {e}")
+                        print(f"Ошибка геокодинга: {e}")
                         location = "Город не найден"
                     
-                    # Создаем новую точку с уже определенным местоположением
+                    # Добавляем точку
                     new_point = {
                         "google": final_google, 
                         "yandex": final_yandex, 
                         "location": location
                     }
                     
-                    # Добавляем в таблицу
                     state.training_data.append(new_point)
                     state.save_config()
                     
-                    print(f"[CALIBRATION] Added: {location} | G: {final_google} | Y: {final_yandex}")
+                    print(f"[КАЛИБРОВКА] Добавлено: {location} | G: {final_google} | Y: {final_yandex}")
                     
-                    # Сбрасываем состояние для следующей пары
                     state.pending_google = None
                     state.calibration_status_text = f"✅ Добавлено: {location}. Скопируйте следующую пару..."
                 
-                # В режиме калибровки не делаем конвертацию
                 continue
 
-            # === РЕЖИМ РАБОТЫ (Конвертация) ===
+            # === РЕЖИМ КОНВЕРТАЦИИ ===
             glat, glon = float(m.group(1)), float(m.group(2))
             
-            # Валидация координат
-            if len(m.group(1)) < 2 and len(m.group(2)) < 2: 
+            if len(m.group(1)) < 2 and len(m.group(2)) < 2:
                 continue
 
-            # Конвертация
             calib_list = state.get_calib_list()
             res = convert_coords_advanced(glat, glon, calib_list)
             
-            # Копируем результат в буфер
             pyperclip.copy(res)
             state.last_clipboard = res
             state.last_found_coords = coords_str
             state.last_result_coords = res
             
-            print(f"[CONVERT] {coords_str} -> {res}")
+            print(f"[КОНВЕРТАЦИЯ] {coords_str} -> {res}")
             
         except Exception as e:
-            print(f"Monitor error: {e}")
+            print(f"Ошибка мониторинга: {e}")
             import traceback
             traceback.print_exc()
             state.is_monitoring = False
             break
 
-# --- FLASK APP ---
-template_folder = state.get_resource_path('templates')
-static_folder = state.get_resource_path('static')
-app = Flask(__name__, template_folder=template_folder, static_folder=static_folder)
+
+# === FLASK ПРИЛОЖЕНИЕ ===
+
+# Определяем пути к ресурсам
+if getattr(sys, 'frozen', False):
+    base_dir = sys._MEIPASS
+else:
+    # Абсолютный путь к папке src
+    base_dir = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+
+template_folder = os.path.join(base_dir, 'templates')
+static_folder = os.path.join(base_dir, 'static')
+
+app = Flask(__name__, 
+            template_folder=template_folder, 
+            static_folder=static_folder,
+            static_url_path='/static')
+
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
 @app.route('/')
 def index():
+    """Главная страница."""
     return render_template('index.html')
+
 
 @app.route('/api/convert', methods=['POST'])
 def api_convert():
+    """API: Ручная конвертация координат."""
     data = request.json
     text = data.get('coords', '')
     m = coord_re.search(text)
@@ -565,8 +511,10 @@ def api_convert():
             return jsonify(success=False, error=str(e))
     return jsonify(success=False, error="Неверный формат координат")
 
+
 @app.route('/api/status')
 def api_status():
+    """API: Текущий статус приложения."""
     status = "stopped"
     if state.is_monitoring:
         status = "calibrating" if state.is_calibrating else "working"
@@ -581,8 +529,10 @@ def api_status():
         pending_google=state.pending_google is not None
     )
 
+
 @app.route('/api/monitoring/start', methods=['POST'])
 def start_monitoring():
+    """API: Запуск мониторинга буфера обмена."""
     if not state.is_monitoring:
         state.is_monitoring = True
         state.is_calibrating = False
@@ -591,8 +541,10 @@ def start_monitoring():
         thread.start()
     return jsonify(success=True)
 
+
 @app.route('/api/calibration/start', methods=['POST'])
 def start_calibration():
+    """API: Запуск режима калибровки."""
     state.is_calibrating = True
 
     if not state.is_monitoring:
@@ -604,17 +556,20 @@ def start_calibration():
     state.calibration_status_text = "Режим калибровки. Скопируйте первую координату..."
     return jsonify(success=True)
 
+
 @app.route('/api/monitoring/stop', methods=['POST'])
 def stop_monitoring():
+    """API: Остановка мониторинга."""
     state.is_monitoring = False
-    state.is_calibrating = False
     state.is_calibrating = False
     state.pending_google = None
     state.calibration_status_text = ""
     return jsonify(success=True)
 
+
 @app.route('/api/calibration/data', methods=['GET', 'DELETE'])
 def calibration_data():
+    """API: Получение/удаление калибровочных данных."""
     if request.method == 'GET':
         return jsonify(state.training_data)
     
@@ -627,7 +582,8 @@ def calibration_data():
         for item in state.training_data:
             should_delete = False
             for del_item in items_to_delete:
-                if item['google'].strip() == del_item['google'].strip() and item['yandex'].strip() == del_item['yandex'].strip():
+                if (item['google'].strip() == del_item['google'].strip() and 
+                    item['yandex'].strip() == del_item['yandex'].strip()):
                     should_delete = True
                     break
             if not should_delete:
@@ -637,29 +593,36 @@ def calibration_data():
         state.save_config()
         return jsonify(success=True)
 
+
 @app.route('/api/calibration/save', methods=['POST'])
 def save_calib():
+    """API: Сохранение калибровочных данных."""
     success = state.save_config()
     return jsonify(success=success)
 
+
 @app.route('/api/calibration/load', methods=['POST'])
 def load_calib():
+    """API: Загрузка калибровочных данных."""
     success = state.load_config()
     return jsonify(success=success)
 
+
 @app.route('/api/calibration/import', methods=['POST'])
 def import_calib():
+    """API: Импорт калибровочных данных из JSON."""
     try:
         new_data = request.json
         if not isinstance(new_data, list):
-            return jsonify(success=False, error="Invalid format")
+            return jsonify(success=False, error="Неверный формат")
             
-        # Валидация
         valid_count = 0
         for item in new_data:
             if 'google' in item and 'yandex' in item:
-                # Добавляем если нет дубликатов
-                is_exist = any(x['google'] == item['google'] and x['yandex'] == item['yandex'] for x in state.training_data)
+                is_exist = any(
+                    x['google'] == item['google'] and x['yandex'] == item['yandex'] 
+                    for x in state.training_data
+                )
                 if not is_exist:
                     if 'location' not in item:
                         item['location'] = ""
@@ -671,83 +634,86 @@ def import_calib():
     except Exception as e:
         return jsonify(success=False, error=str(e))
 
+
 @app.route('/api/calibration/export', methods=['POST'])
 def export_calib():
-    # Возвращаем JSON напрямую для скачивания на клиенте
+    """API: Экспорт калибровочных данных в JSON."""
     return jsonify(state.training_data)
+
 
 @app.route('/api/clipboard/copy', methods=['POST'])
 def clipboard_copy():
+    """API: Копирование текста в буфер обмена."""
     text = request.json.get('text', '')
     pyperclip.copy(text)
     return jsonify(success=True)
 
+
 @app.route('/api/calibration/update-locations', methods=['POST'])
 def update_locations():
-    """
-    Обновляет местоположения для проблемных точек.
-    """
+    """API: Обновление местоположений для точек без геоданных."""
     updated_count = 0
     for point in state.training_data:
         loc = point.get('location', '')
-        # Обновляем, если пусто или ошибка
         if not loc or loc in ["Город не найден", "Не удалось получить данные", "Загрузка..."]:
              geocoding_service.add_task(point)
              updated_count += 1
     
-    return jsonify(success=True, message=f"В очередь добавлено точек: {updated_count}", count=updated_count)
+    return jsonify(success=True, message=f"В очередь добавлено: {updated_count}", count=updated_count)
 
+
+# === ЗАПУСК ПРИЛОЖЕНИЯ ===
 
 def open_window(port):
-    """Пытается открыть окно в режиме приложения или просто браузер"""
+    """Открывает окно в режиме приложения или браузере."""
     url = f'http://127.0.0.1:{port}'
-    print(f"Opening... {url}")
+    print(f"Открытие... {url}")
 
-    # Размер окна для режима app (Edge/Chrome) - фиксированный 780x700
     win_w, win_h = 780, 700
-    win_x, win_y = 80, 60
+    win_x, win_y = 80, 80
     
-    # Попытка открыть Edge в режиме App (Windows)
+    # Edge в режиме App
     try:
         subprocess.Popen(
             f'start msedge --app={url} --window-size={win_w},{win_h} --window-position={win_x},{win_y}',
             shell=True
         )
         return
-    except: pass
+    except:
+        pass
     
-    # Попытка открыть Chrome в режиме App
+    # Chrome в режиме App
     try:
         subprocess.Popen(
             f'start chrome --app={url} --window-size={win_w},{win_h} --window-position={win_x},{win_y}',
             shell=True
         )
         return
-    except: pass
+    except:
+        pass
     
-    # Fallback на обычный браузер
+    # Обычный браузер
     webbrowser.open_new_tab(url)
 
+
 if __name__ == '__main__':
-    PORT = 5001
+    PORT = 5002
     
-    # Если есть webview и он работает - используем его (хотя из-за pythonnet скорее всего нет)
     if HAS_WEBVIEW:
         try:
             window = webview.create_window(
-                'Google → Yandex Coords Pro', 
+                'Google → Yandex Coords', 
                 app,
                 width=780,
                 height=700,
-                resizable=True,  # Разрешаем изменение размера
+                resizable=True,
                 min_size=(560, 440),
                 background_color='#0f0f23'
             )
             webview.start()
             sys.exit(0)
         except Exception as e:
-            print(f"Webview failed: {e}. Switching to browser mode.")
+            print(f"Ошибка webview: {e}. Переключение на браузер.")
     
-    # Запуск в браузере (Fallback)
     threading.Timer(1.0, lambda: open_window(PORT)).start()
     app.run(port=PORT, debug=False)

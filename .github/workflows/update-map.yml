@@ -3,7 +3,7 @@ name: Update Calibration Map
 on:
   push:
     paths:
-      - 'calibration.json'
+      - 'data/calibration.json'
   workflow_dispatch:
 
 jobs:
@@ -23,11 +23,11 @@ jobs:
           python-version: '3.x'
           
       - name: Generate GeoJSON map
-        run: python generate_map.py
+        run: python scripts/generate_map.py
         
       - name: Commit and push if changed
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add calibration_map.geojson
+          git add data/calibration_map.geojson
           git diff --quiet && git diff --staged --quiet || (git commit -m "🗺️ Auto-update calibration map" && git push origin HEAD:main)
